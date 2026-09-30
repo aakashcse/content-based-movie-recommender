@@ -354,10 +354,10 @@ with tab1:
                                 unsafe_allow_html=True)
 
                 # ✅ NEW: Add to Watchlist button
-                if st.button("❤️ Watchlist", key=f"watch_{idx}"):
+                if st.button("➕ Add to Watchlist", key=f"watch_{idx}"):
                     result = add_to_watchlist(mid, name, poster)
                     if result == 'added':
-                        st.success("Added!")
+                        st.success("Added! Open the ❤️ Watchlist tab to see it.")
                     elif result == 'duplicate':
                         st.warning("Already in watchlist!")
                     else:
