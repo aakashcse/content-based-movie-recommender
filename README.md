@@ -2,6 +2,9 @@
 
 A Netflix-style movie recommendation web app built with **Python** and **Streamlit**. Pick a movie you like and CineMatch suggests 5 similar movies, with posters, ratings, genres and plot summaries fetched live from the **TMDB API**.
 
+**🔗 Live demo:** https://content-based-movie-recommender-abrk.onrender.com
+> Hosted on Render's free plan: if the app has been idle, the first load can take about a minute while it wakes up.
+
 ## Features
 - **🔍 Recommend:** get 5 similar movies from a catalogue of ~4,800 films (TMDB 5000 dataset)
 - **🎲 Surprise Me:** recommendations for a randomly picked movie
