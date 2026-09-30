@@ -5,6 +5,7 @@ import pandas as pd
 import requests
 import time
 import random
+import html
 
 st.set_page_config(page_title="CineMatch", page_icon="🎬", layout="wide")
 
@@ -175,18 +176,26 @@ def fetch_trending():
 def recommend(movie):
     movie_index = movies[movies['title'] == movie].index[0]
     # Top 5 most similar movies (cosine similarity, precomputed in top_matches.npy)
-    movies_list = top_matches[movie_index][:5]
+    movies_list = top_matches[movie_index]
 
     recommended_movies = []
     recommended_posters = []
     recommended_ids = []
+    # The dataset contains a few duplicate rows (same movie twice), so skip the selected
+    # movie itself and any movie already recommended, and stop at 5.
+    seen_ids = {int(movies.iloc[movie_index].id)}
 
     for i in movies_list:
         movie_id = int(movies.iloc[i].id)
+        if movie_id in seen_ids:
+            continue
+        seen_ids.add(movie_id)
         movie_title = movies.iloc[i].title
         recommended_movies.append(movie_title)
         recommended_posters.append(fetch_poster(movie_id))
         recommended_ids.append(movie_id)
+        if len(recommended_ids) == 5:
+            break
 
     return recommended_movies, recommended_posters, recommended_ids
 
@@ -196,7 +205,10 @@ def recommend(movie):
 @st.cache_resource(show_spinner=False)
 def load_data():
     with open('Movies_d.pkl', 'rb') as f:
-        movies_df = pd.DataFrame(pickle.load(f))
+        # reset_index: the saved DataFrame has gaps in its row labels (rows were dropped in
+        # the notebook), but top_matches is indexed by row POSITION. Without this, 45% of
+        # movies got another movie's recommendations and 3 movies crashed the app.
+        movies_df = pd.DataFrame(pickle.load(f)).reset_index(drop=True)
     # For each movie, the indices of its 10 most similar movies. Built from the
     # full cosine-similarity matrix (185 MB) so the app stays small enough for GitHub.
     matches = np.load('top_matches.npy')
@@ -204,9 +216,71 @@ def load_data():
 
 movies, top_matches = load_data()
 
+
+# ==================== WATCHLIST ====================
+# Each saved movie is a dict {'id', 'title', 'poster'} identified by its TMDB id
+# (titles are not unique, e.g. two different films called "Batman").
+# The list lives in st.session_state and is mirrored to the page URL
+# (?watchlist=19995,285) so it survives a page refresh.
+
+def save_watchlist_to_url():
+    ids = ",".join(str(m['id']) for m in st.session_state.watchlist)
+    if ids:
+        st.query_params["watchlist"] = ids
+    elif "watchlist" in st.query_params:
+        del st.query_params["watchlist"]
+
+
+def load_watchlist_from_url():
+    """Rebuild the watchlist from the URL. Returns (items, number_of_invalid_entries)."""
+    items, skipped = [], 0
+    for part in st.query_params.get("watchlist", "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if not part.isdigit():
+            skipped += 1
+            continue
+        movie_id = int(part)
+        match = movies[movies['id'] == movie_id]
+        if match.empty:
+            skipped += 1
+            continue
+        if any(m['id'] == movie_id for m in items):
+            continue
+        items.append({'id': movie_id, 'title': match.iloc[0].title, 'poster': fetch_poster(movie_id)})
+    return items, skipped
+
+
+def add_to_watchlist(movie_id, title, poster):
+    """Returns 'added', 'duplicate' or 'error'."""
+    try:
+        movie_id = int(movie_id)
+    except (TypeError, ValueError):
+        return 'error'
+    if not title:
+        return 'error'
+    if any(m['id'] == movie_id for m in st.session_state.watchlist):
+        return 'duplicate'
+    st.session_state.watchlist.append({'id': movie_id, 'title': str(title), 'poster': poster or NO_POSTER})
+    save_watchlist_to_url()
+    return 'added'
+
+
+def remove_from_watchlist(movie_id):
+    """Returns True if the movie was found and removed."""
+    before = len(st.session_state.watchlist)
+    st.session_state.watchlist = [m for m in st.session_state.watchlist if m['id'] != movie_id]
+    save_watchlist_to_url()
+    return len(st.session_state.watchlist) < before
+
+
 # ✅ Watchlist + current recommendations stored in session state
 if 'watchlist' not in st.session_state:
-    st.session_state.watchlist = []
+    st.session_state.watchlist, skipped = load_watchlist_from_url()
+    if skipped:
+        st.session_state.watchlist_msg = ('warning', f"{skipped} saved item(s) could not be restored and were skipped.")
+    save_watchlist_to_url()
 if 'recs' not in st.session_state:
     st.session_state.recs = None
 
@@ -228,7 +302,7 @@ tab1, tab2, tab3 = st.tabs(["🔍 Recommend", "🔥 Trending", "❤️ Watchlist
 with tab1:
     col_a, col_b, col_c = st.columns([1, 3, 1])
     with col_b:
-        selected_movie_name = st.selectbox("🎬 Search a Movie", movies['title'].values)
+        selected_movie_name = st.selectbox("🎬 Search a Movie", movies['title'].unique())
 
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
@@ -238,7 +312,7 @@ with tab1:
 
     # ✅ Random movie button
     if random_clicked:
-        selected_movie_name = random.choice(movies['title'].values)
+        selected_movie_name = random.choice(movies['title'].unique())
         st.info(f"🎲 Randomly picked: **{selected_movie_name}**")
         clicked = True
 
@@ -254,7 +328,7 @@ with tab1:
         selected_movie_name = recs['movie']
         names, posters, ids = recs['names'], recs['posters'], recs['ids']
 
-        st.markdown(f'<p class="section-header">Because you watched: {selected_movie_name}</p>',
+        st.markdown(f'<p class="section-header">Because you watched: {html.escape(selected_movie_name)}</p>',
                     unsafe_allow_html=True)
 
         cols = st.columns(5)
@@ -263,9 +337,9 @@ with tab1:
                 # Movie card
                 st.markdown(f"""
                     <div class="movie-card">
-                        <img src="{poster}" />
+                        <img src="{poster or NO_POSTER}" />
                         <div class="movie-info">
-                            <div class="movie-name">{name}</div>
+                            <div class="movie-name">{html.escape(str(name or 'Unknown title'))}</div>
                         </div>
                     </div>
                 """, unsafe_allow_html=True)
@@ -281,12 +355,13 @@ with tab1:
 
                 # ✅ NEW: Add to Watchlist button
                 if st.button("❤️ Watchlist", key=f"watch_{idx}"):
-                    saved_titles = [m['title'] for m in st.session_state.watchlist]
-                    if name not in saved_titles:
-                        st.session_state.watchlist.append({'title': name, 'poster': poster})
+                    result = add_to_watchlist(mid, name, poster)
+                    if result == 'added':
                         st.success("Added!")
-                    else:
+                    elif result == 'duplicate':
                         st.warning("Already in watchlist!")
+                    else:
+                        st.error("Could not add this movie. Please try again.")
 
 
 # ==================== TAB 2: TRENDING ====================
@@ -320,6 +395,11 @@ with tab2:
 with tab3:
     st.markdown('<p class="section-header">❤️ My Watchlist</p>', unsafe_allow_html=True)
 
+    # Message from the previous action (remove / clear / restore), shown once
+    msg = st.session_state.pop('watchlist_msg', None)
+    if msg:
+        getattr(st, msg[0])(msg[1])
+
     if not st.session_state.watchlist:
         st.info("💡 Your watchlist is empty! Add movies from the Recommend tab.")
     else:
@@ -336,18 +416,30 @@ with tab3:
                     <div class="movie-card">
                         <img src="{item['poster']}" />
                         <div class="movie-info">
-                            <div class="movie-name">{item['title']}</div>
+                            <div class="movie-name">{html.escape(item['title'])}</div>
                         </div>
                     </div>
-                    <br/>
                 """, unsafe_allow_html=True)
-                if st.button("🗑️ Remove", key=f"remove_{idx}"):
-                    to_remove = idx
+                with st.expander("ℹ️ Details"):
+                    details = fetch_movie_details(item['id'])
+                    st.markdown(f"⭐ **Rating:** {details['rating']}/10")
+                    st.markdown(f"📅 **Year:** {details['year']}")
+                    st.markdown(f"🎭 **Genre:** {details['genres']}")
+                    st.markdown(f'<div class="overview-box">{details["overview"]}</div>',
+                                unsafe_allow_html=True)
+                if st.button("🗑️ Remove", key=f"remove_{item['id']}"):
+                    to_remove = item
+                st.write("")
 
         if to_remove is not None:
-            st.session_state.watchlist.pop(to_remove)
+            if remove_from_watchlist(to_remove['id']):
+                st.session_state.watchlist_msg = ('success', f"Removed \"{to_remove['title']}\" from your watchlist.")
+            else:
+                st.session_state.watchlist_msg = ('error', "Could not remove this movie. Please refresh and try again.")
             st.rerun()
 
         if st.button("🗑️ Clear Entire Watchlist"):
             st.session_state.watchlist = []
+            save_watchlist_to_url()
+            st.session_state.watchlist_msg = ('success', "Watchlist cleared.")
             st.rerun()
