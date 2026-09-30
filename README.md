@@ -7,7 +7,7 @@ A Netflix-style movie recommendation web app built with **Python** and **Streaml
 - **🎲 Surprise Me:** recommendations for a randomly picked movie
 - **ℹ️ Movie details:** rating, release year, genres and overview for each recommendation
 - **🔥 Trending:** this week's trending movies from TMDB
-- **❤️ Watchlist:** save movies and remove them during your session
+- **❤️ Watchlist:** save movies, view their details and remove them; duplicates are blocked and the list survives a page refresh (saved in the URL)
 - Custom dark, Netflix-inspired UI with hover effects
 
 ## How It Works
